@@ -1,5 +1,7 @@
 {
   "chaintogether.bound.success": "Successfully bound to %s!",
   "chaintogether.unbound.success": "Successfully unbound from %s!",
-  "chaintogether.unbound.success.alone": "Successfully unbound!"
+  "chaintogether.unbound.success.alone": "Successfully unbound!",
+  "key.chaintogether.pull_chain": "Pull chain target",
+  "key.categories.chaintogether": "Chain Together"
 }

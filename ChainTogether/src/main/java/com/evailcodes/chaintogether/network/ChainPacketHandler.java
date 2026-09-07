@@ -3,9 +3,8 @@ package com.evailcodes.chaintogether.network;
 import com.evailcodes.chaintogether.ChainTogether;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.network.NetworkDirection;
-import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
+import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public class ChainPacketHandler {
@@ -19,17 +18,20 @@ public class ChainPacketHandler {
     private static int packetId = 0;
 
     public static void register() {
-        // 注册包
         INSTANCE.registerMessage(packetId++, UpdateChainLengthPacket.class,
                 UpdateChainLengthPacket::encode,
                 UpdateChainLengthPacket::decode,
                 UpdateChainLengthPacket::handle);
-        
-        // 注册绑定状态同步包
+
         INSTANCE.registerMessage(packetId++, SyncBoundStatusPacket.class,
                 SyncBoundStatusPacket::encode,
                 SyncBoundStatusPacket::decode,
                 SyncBoundStatusPacket::handle);
+
+        INSTANCE.registerMessage(packetId++, PullChainedPlayerPacket.class,
+                PullChainedPlayerPacket::encode,
+                PullChainedPlayerPacket::decode,
+                PullChainedPlayerPacket::handle);
     }
 
     public static <MSG> void sendToServer(MSG message) {

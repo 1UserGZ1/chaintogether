@@ -1,5 +1,7 @@
 {
   "chaintogether.bound.success": "已成功与 %s 绑定！",
   "chaintogether.unbound.success": "已成功与 %s 解绑！",
-  "chaintogether.unbound.success.alone": "已成功解绑！"
+  "chaintogether.unbound.success.alone": "已成功解绑！",
+  "key.chaintogether.pull_chain": "拉动链条目标",
+  "key.categories.chaintogether": "Chain Together"
 }
