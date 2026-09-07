@@ -1,53 +1,52 @@
 package com.evailcodes.chaintogether.client;
 
 import com.evailcodes.chaintogether.config.ChainConfig;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.world.entity.Entity;
+import net.minecraft.client.renderer.block.BlockRenderDispatcher;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChainBlock;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import java.awt.*;
-import java.util.ArrayList;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Mod.EventBusSubscriber(value = Dist.CLIENT, modid = "chaintogether")
 public class ChainRenderer {
-    // 客户端绑定状态缓存
-    private static final Map<java.util.UUID, java.util.UUID> CLIENT_BOUND_PLAYERS = new HashMap<>();
-    
+    private static final Map<UUID, UUID> CLIENT_BOUND_PLAYERS = new HashMap<>();
+    private static final net.minecraft.world.level.block.state.BlockState CHAIN_STATE =
+            Blocks.CHAIN.defaultBlockState().setValue(ChainBlock.AXIS, Direction.Axis.Y);
+
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() == RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
-            Minecraft mc = Minecraft.getInstance();
-            LocalPlayer localPlayer = mc.player;
-            
-            if (localPlayer == null || mc.level == null) {
-                return;
-            }
-            
-            renderWires(event.getPoseStack(), localPlayer, event.getPartialTick());
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
+            return;
         }
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
+
+        renderChains(event.getPoseStack(), event.getPartialTick());
     }
-    
-    // 检查两个玩家是否绑定
-    private static boolean isPlayersBound(Player player1, Player player2) {
-        // 检查是否在客户端缓存中绑定
-        return CLIENT_BOUND_PLAYERS.containsKey(player1.getUUID()) && 
-               CLIENT_BOUND_PLAYERS.get(player1.getUUID()).equals(player2.getUUID());
-    }
-    
-    // 同步绑定状态（实际应该通过网络包调用）
-    public static void syncBoundStatus(java.util.UUID player1, java.util.UUID player2, boolean bound) {
+
+    public static void syncBoundStatus(UUID player1, UUID player2, boolean bound) {
         if (bound) {
             CLIENT_BOUND_PLAYERS.put(player1, player2);
             CLIENT_BOUND_PLAYERS.put(player2, player1);
@@ -56,156 +55,189 @@ public class ChainRenderer {
             CLIENT_BOUND_PLAYERS.remove(player2);
         }
     }
-    
-    private static void renderWires(PoseStack poseStack, Player player, float partialTicks) {
-        Minecraft mc = Minecraft.getInstance();
+
+    public static Player getTargetedBoundPartner(Minecraft mc) {
         LocalPlayer localPlayer = mc.player;
-        
+        if (localPlayer == null || mc.level == null) {
+            return null;
+        }
+
+        UUID partnerId = CLIENT_BOUND_PLAYERS.get(localPlayer.getUUID());
+        if (partnerId == null) {
+            return null;
+        }
+
+        Player partner = mc.level.getPlayerByUUID(partnerId);
+        if (partner == null) {
+            return null;
+        }
+
+        return isLookingAtChain(mc, localPlayer, partner, mc.getFrameTime()) ? partner : null;
+    }
+
+    private static void renderChains(PoseStack poseStack, float partialTicks) {
+        Minecraft mc = Minecraft.getInstance();
+        Player localPlayer = mc.player;
         if (localPlayer == null || mc.level == null) {
             return;
         }
-        
-        List<PlayerWireData> wires = new ArrayList<>();
-        
-        // 只渲染本地玩家和其绑定伙伴之间的线条
-        // 由于网络同步暂时未实现，这里使用一个简单的方法：
-        // 检查本地玩家是否有绑定伙伴（通过客户端缓存）
-        // 注意：这是一个临时解决方案，实际应该通过网络包同步绑定状态
-        for (Player otherPlayer : mc.level.players()) {
-            if (otherPlayer != localPlayer) {
-                // 检查两个玩家是否绑定（这里应该通过网络同步获取，暂时使用模拟方法）
-                // 实际实现时，应该从服务器同步绑定状态
-                if (isPlayersBound(localPlayer, otherPlayer)) {
-                    // 使用实际的配置值作为距离倍数
-                    double maxDistance = ChainConfig.CHAIN_LENGTH.get() * 10.0;
-                    wires.add(new PlayerWireData(localPlayer.getUUID(), otherPlayer.getUUID(), maxDistance, true));
+
+        Vec3 cameraPos = mc.gameRenderer.getMainCamera().getPosition();
+        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
+        BlockRenderDispatcher blockRenderer = mc.getBlockRenderer();
+        float alpha = ChainConfig.getTransparencyAsFloat();
+
+        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, alpha);
+        try {
+            for (Player otherPlayer : mc.level.players()) {
+                if (otherPlayer == localPlayer) {
+                    continue;
                 }
+                if (!isPlayersBound(localPlayer, otherPlayer)) {
+                    continue;
+                }
+
+                renderChainBetweenPlayers(
+                        poseStack,
+                        bufferSource,
+                        blockRenderer,
+                        cameraPos,
+                        localPlayer,
+                        otherPlayer,
+                        partialTicks
+                );
             }
+            bufferSource.endBatch();
+        } finally {
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
         }
-        
-        if (wires.isEmpty()) {
+    }
+
+    private static boolean isPlayersBound(Player player1, Player player2) {
+        return CLIENT_BOUND_PLAYERS.containsKey(player1.getUUID())
+                && CLIENT_BOUND_PLAYERS.get(player1.getUUID()).equals(player2.getUUID());
+    }
+
+    private static boolean isLookingAtChain(Minecraft mc, Player player1, Player player2, float partialTicks) {
+        Vec3 cameraPos = mc.gameRenderer.getMainCamera().getPosition();
+        Vector3f lookVector = mc.gameRenderer.getMainCamera().getLookVector();
+        Vec3 rayDir = new Vec3(lookVector.x, lookVector.y, lookVector.z).normalize();
+
+        Vec3 start = chainAnchor(player1, partialTicks);
+        Vec3 end = chainAnchor(player2, partialTicks);
+        return isRayCloseToSegment(cameraPos, rayDir, start, end, 0.45D);
+    }
+
+    private static void renderChainBetweenPlayers(
+            PoseStack poseStack,
+            MultiBufferSource bufferSource,
+            BlockRenderDispatcher blockRenderer,
+            Vec3 cameraPos,
+            Player player1,
+            Player player2,
+            float partialTicks
+    ) {
+        Vec3 start = player1.getPosition(partialTicks).add(0.0, 1.0, 0.0);
+        Vec3 end = player2.getPosition(partialTicks).add(0.0, 1.0, 0.0);
+        Vec3 delta = end.subtract(start);
+        double distance = delta.length();
+
+        double maxDistance = ChainConfig.CHAIN_LENGTH.get() * 10.0;
+        if (distance <= 0.01 || distance > maxDistance * 2.0) {
             return;
         }
-        
-        // 获取渲染缓冲区
-        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
-        VertexConsumer vertexConsumer = bufferSource.getBuffer(RenderType.LINES);
-        
-        // 获取相机位置
-        Vec3 cameraPos = mc.gameRenderer.getMainCamera().getPosition();
-        
-        for (PlayerWireData wire : wires) {
-            // 检查是否激活
-            if (!wire.isActive()) {
-                continue; // 不渲染
-            }
-            
-            Player player1 = mc.level.getPlayerByUUID(wire.getPlayer1());
-            Player player2 = mc.level.getPlayerByUUID(wire.getPlayer2());
-            
-            if (player1 == null || player2 == null) {
-                continue;
-            }
-            
-            // 计算位置（考虑部分刻度）
-            Vec3 pos1 = player1.getPosition(partialTicks);
-            Vec3 pos2 = player2.getPosition(partialTicks);
-            
-            // 计算距离
-            double distance = pos1.distanceTo(pos2);
-            double maxDistance = wire.getMaxDistance();
-            
-            // 检查是否超过200%距离
-            if (distance > maxDistance * 2.0) {
-                continue; // 不渲染
-            }
-            
-            // 计算颜色渐变
-            Color color = calculateColor(distance, maxDistance);
-            
-            // 渲染线
-            renderLine(poseStack, vertexConsumer, cameraPos, pos1, pos2, color);
-        }
-        
-        // 结束渲染
-        bufferSource.endBatch(RenderType.LINES);
-    }
-    
-    private static Color calculateColor(double distance, double maxDistance) {
-        double percentage = distance / maxDistance;
-        
-        if (percentage <= 0.5) {
-            // 绿色
-            return Color.GREEN;
-        } else if (percentage <= 1.0) {
-            // 从绿色渐变到红色
-            float factor = (float) ((percentage - 0.5) / 0.5);
-            int red = Math.min(255, (int) (255 * factor));
-            int green = Math.min(255, 255 - red);
-            return new Color(red, green, 0);
-        } else {
-            // 红色
-            return Color.RED;
+
+        Vec3 direction = delta.normalize();
+        int segmentCount = Math.max(1, (int) Math.ceil(distance / 0.42));
+
+        for (int i = 0; i < segmentCount; i++) {
+            float progress = (i + 0.5f) / segmentCount;
+            Vec3 segmentPos = start.lerp(end, progress);
+            renderChainSegment(poseStack, blockRenderer, bufferSource, cameraPos, segmentPos, direction, i);
         }
     }
-    
-    private static void renderLine(PoseStack poseStack, VertexConsumer vertexConsumer, Vec3 cameraPos, Vec3 start, Vec3 end, Color color) {
+
+    private static void renderChainSegment(
+            PoseStack poseStack,
+            BlockRenderDispatcher blockRenderer,
+            MultiBufferSource bufferSource,
+            Vec3 cameraPos,
+            Vec3 worldPos,
+            Vec3 direction,
+            int segmentIndex
+    ) {
         poseStack.pushPose();
-        
-        // 获取透明度
-        float alpha = ChainConfig.getTransparencyAsFloat();
-        
-        // 计算相对位置
-        Vec3 startRelative = start.subtract(cameraPos);
-        Vec3 endRelative = end.subtract(cameraPos);
-        
-        // 转换颜色为浮点数
-        float r = color.getRed() / 255.0f;
-        float g = color.getGreen() / 255.0f;
-        float b = color.getBlue() / 255.0f;
-        
-        // 渲染线
-        vertexConsumer.vertex(poseStack.last().pose(), (float) startRelative.x, (float) startRelative.y + 1.0f, (float) startRelative.z)
-                .color(r, g, b, alpha)
-                .normal(0, 1, 0)
-                .endVertex();
-        
-        vertexConsumer.vertex(poseStack.last().pose(), (float) endRelative.x, (float) endRelative.y + 1.0f, (float) endRelative.z)
-                .color(r, g, b, alpha)
-                .normal(0, 1, 0)
-                .endVertex();
-        
-        poseStack.popPose();
+        try {
+            poseStack.translate(
+                    worldPos.x - cameraPos.x,
+                    worldPos.y - cameraPos.y,
+                    worldPos.z - cameraPos.z
+            );
+            poseStack.translate(-0.5, -0.5, -0.5);
+
+            Quaternionf rotation = new Quaternionf().rotationTo(
+                    new Vector3f(0.0f, 1.0f, 0.0f),
+                    new Vector3f((float) direction.x, (float) direction.y, (float) direction.z)
+            );
+            if ((segmentIndex & 1) == 1) {
+                rotation.rotateY((float) (Math.PI / 2.0));
+            }
+            poseStack.mulPose(rotation);
+            poseStack.scale(0.48f, 0.48f, 0.48f);
+
+            int light = LevelRenderer.getLightColor(Minecraft.getInstance().level, BlockPos.containing(worldPos));
+            blockRenderer.renderSingleBlock(CHAIN_STATE, poseStack, bufferSource, light, OverlayTexture.NO_OVERLAY);
+        } finally {
+            poseStack.popPose();
+        }
     }
-    
-    // 玩家绑定线数据类
-    private static class PlayerWireData {
-        private final java.util.UUID player1;
-        private final java.util.UUID player2;
-        private final double maxDistance;
-        private final boolean active;
-        
-        public PlayerWireData(java.util.UUID player1, java.util.UUID player2, double maxDistance, boolean active) {
-            this.player1 = player1;
-            this.player2 = player2;
-            this.maxDistance = maxDistance;
-            this.active = active;
+
+    private static Vec3 chainAnchor(Player player, float partialTicks) {
+        return player.getPosition(partialTicks).add(0.0, 1.0, 0.0);
+    }
+
+    private static boolean isRayCloseToSegment(Vec3 rayOrigin, Vec3 rayDir, Vec3 segmentStart, Vec3 segmentEnd, double threshold) {
+        Vec3 segment = segmentEnd.subtract(segmentStart);
+        Vec3 w0 = rayOrigin.subtract(segmentStart);
+
+        double b = rayDir.dot(segment);
+        double c = segment.lengthSqr();
+        double d = rayDir.dot(w0);
+        double e = segment.dot(w0);
+        double denom = c - b * b;
+        double thresholdSq = threshold * threshold;
+
+        if (denom > 1.0E-6D) {
+            double rayT = (b * e - c * d) / denom;
+            if (rayT < 0.0D) {
+                return false;
+            }
+
+            double segT = (e - b * d) / denom;
+            segT = clamp(segT, 0.0D, 1.0D);
+
+            Vec3 segmentPoint = segmentStart.add(segment.scale(segT));
+            double projectedRayT = Math.max(0.0D, segmentPoint.subtract(rayOrigin).dot(rayDir));
+            Vec3 rayPoint = rayOrigin.add(rayDir.scale(projectedRayT));
+            return rayPoint.distanceToSqr(segmentPoint) <= thresholdSq;
         }
-        
-        public java.util.UUID getPlayer1() {
-            return player1;
+
+        return distanceToRaySquared(rayOrigin, rayDir, segmentStart) <= thresholdSq
+                || distanceToRaySquared(rayOrigin, rayDir, segmentEnd) <= thresholdSq
+                || distanceToRaySquared(rayOrigin, rayDir, segmentStart.add(segment.scale(0.5D))) <= thresholdSq;
+    }
+
+    private static double distanceToRaySquared(Vec3 rayOrigin, Vec3 rayDir, Vec3 point) {
+        Vec3 delta = point.subtract(rayOrigin);
+        double t = delta.dot(rayDir);
+        if (t <= 0.0D) {
+            return delta.lengthSqr();
         }
-        
-        public java.util.UUID getPlayer2() {
-            return player2;
-        }
-        
-        public double getMaxDistance() {
-            return maxDistance;
-        }
-        
-        public boolean isActive() {
-            return active;
-        }
+        Vec3 closest = rayOrigin.add(rayDir.scale(t));
+        return closest.distanceToSqr(point);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 }
